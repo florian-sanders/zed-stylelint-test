@@ -4,6 +4,8 @@ on:
   schedule:
     # Check for new vscode-stylelint releases every Monday at 9am UTC
     - cron: '0 9 * * 1'
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       version:
@@ -19,7 +21,59 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Rebase any open update-lsp-* PR when main is updated
+  rebase:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find Open LSP Update PR
+        id: find-pr
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              base: 'main',
+              per_page: 100
+            });
+
+            const lspPr = prs.find(pr => pr.head.ref.startsWith('update-lsp-'));
+            if (!lspPr) {
+              console.log('No open LSP update PR found');
+              return;
+            }
+
+            console.log(`Found PR #${lspPr.number}: ${lspPr.title} (branch: ${lspPr.head.ref})`);
+            core.setOutput('pr-number', lspPr.number);
+            core.setOutput('branch', lspPr.head.ref);
+            core.setOutput('found', 'true');
+
+      - name: Checkout
+        if: steps.find-pr.outputs.found == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.find-pr.outputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rebase onto main
+        if: steps.find-pr.outputs.found == 'true'
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git fetch origin main
+          if git rebase origin/main; then
+            git push --force-with-lease origin ${{ steps.find-pr.outputs.branch }}
+            echo "Successfully rebased and pushed"
+          else
+            git rebase --abort
+            echo "::warning::Rebase failed due to conflicts — manual intervention needed"
+          fi
+
   update:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
