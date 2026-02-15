@@ -14,6 +14,10 @@ inputs:
     description: 'Whether to create as draft'
     required: false
     default: 'true'
+  prerelease:
+    description: 'Whether to create as prerelease (assets are publicly accessible unlike drafts)'
+    required: false
+    default: 'false'
   body:
     description: 'Release body/description'
     required: false
@@ -30,4 +34,4 @@ outputs:
     value: ${{ steps.create.outputs.upload-url }}
 runs:
   using: 'node24'
-  main: 'index.ts'
+  main: 'dist/index.mjs'

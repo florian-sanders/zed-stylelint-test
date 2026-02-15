@@ -109,30 +109,24 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Check Actions Structure
-        run: |
-          if [ ! -d ".github/actions" ]; then
-            echo "Warning: .github/actions directory not found"
-            exit 0
-          fi
-          
-          echo "Checking actions structure..."
-          ls -la .github/actions/
-
       - name: Install Action Dependencies
         working-directory: .github/actions
-        run: |
-          if [ -f "package.json" ]; then
-            npm ci
-          else
-            echo "No package.json found, skipping"
-          fi
+        run: npm ci
 
       - name: Type Check Actions
         working-directory: .github/actions
+        run: npm run typecheck
+
+      - name: Build Actions
+        working-directory: .github/actions
+        run: npm run build
+
+      - name: Verify Bundles Match Committed
+        working-directory: .github/actions
         run: |
-          if [ -f "package.json" ]; then
-            npx tsc --noEmit
+          if git diff --exit-code -- '*/dist/'; then
+            echo "Bundles are up to date"
           else
-            echo "No package.json found, skipping"
+            echo "Error: Committed bundles are out of date. Run 'npm run build' in .github/actions/ and commit the dist/ files."
+            exit 1
           fi

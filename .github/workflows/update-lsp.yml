@@ -1,0 +1,138 @@
+name: Update LSP
+
+on:
+  schedule:
+    # Check for new vscode-stylelint releases every Monday at 9am UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'LSP version to update to (e.g., 1.7.0). Leave empty to auto-detect.'
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: update-lsp
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Check LSP Version
+        id: check
+        if: ${{ !inputs.version }}
+        uses: ./.github/actions/check-lsp-version
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determine Version
+        id: version
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "update_needed=true" >> $GITHUB_OUTPUT
+            echo "changelog=Manual update to v${{ inputs.version }}" >> $GITHUB_OUTPUT
+            echo "Using manual version: ${{ inputs.version }}"
+          else
+            echo "version=${{ steps.check.outputs.latest-version }}" >> $GITHUB_OUTPUT
+            echo "update_needed=${{ steps.check.outputs.update-needed }}" >> $GITHUB_OUTPUT
+            echo "changelog<<EOF" >> $GITHUB_OUTPUT
+            echo "${{ steps.check.outputs.changelog }}" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+            echo "Auto-detected version: ${{ steps.check.outputs.latest-version }}"
+            echo "Update needed: ${{ steps.check.outputs.update-needed }}"
+          fi
+
+      - name: Exit if No Update Needed
+        if: steps.version.outputs.update_needed != 'true'
+        run: |
+          echo "No LSP update needed. Current version is up to date."
+          exit 0
+
+      - name: Build LSP
+        if: steps.version.outputs.update_needed == 'true'
+        id: build-lsp
+        uses: ./.github/actions/build-lsp
+        with:
+          version: ${{ steps.version.outputs.version }}
+
+      - name: Update Version Files
+        if: steps.version.outputs.update_needed == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+
+          # Update extension.toml: lsp_required_version and version
+          sed -i "s/^lsp_required_version = \".*\"/lsp_required_version = \"${VERSION}\"/" extension.toml
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" extension.toml
+
+          # Update Cargo.toml version to match
+          sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
+
+          echo "Updated versions to ${VERSION}"
+          echo "extension.toml:"
+          cat extension.toml
+          echo ""
+          echo "Cargo.toml (first 10 lines):"
+          head -10 Cargo.toml
+
+      - name: Commit Version Update
+        if: steps.version.outputs.update_needed == 'true'
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          git config user.name 'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git add extension.toml Cargo.toml Cargo.lock
+          git diff --cached --quiet && echo "No version changes to commit" || \
+            git commit -m "chore: bump version to v${VERSION}"
+
+      - name: Create Prerelease
+        if: steps.version.outputs.update_needed == 'true'
+        id: prerelease
+        uses: ./.github/actions/create-draft-release
+        with:
+          lsp-version: ${{ steps.version.outputs.version }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          draft: 'false'
+          prerelease: 'true'
+          body: |
+            Prerelease for LSP v${{ steps.version.outputs.version }}
+
+            This is a prerelease created for testing. It will be promoted to a full release when the update PR is merged.
+
+      - name: Create Pull Request
+        if: steps.version.outputs.update_needed == 'true'
+        uses: ./.github/actions/create-pull-request
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: update-lsp-${{ steps.version.outputs.version }}
+          title: 'chore: update language server to v${{ steps.version.outputs.version }}'
+          body: |
+            ## Update Language Server to v${{ steps.version.outputs.version }}
+
+            Updates the vscode-stylelint language server to v${{ steps.version.outputs.version }}.
+
+            ### Changes from upstream
+
+            ${{ steps.version.outputs.changelog }}
+
+            ### Prerelease
+
+            A [prerelease](${{ steps.prerelease.outputs.release-url }}) has been created with the LSP assets attached.
+            You can test the extension by installing it from this prerelease.
+
+            ---
+            *This PR was automatically created by the [Update LSP](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) workflow.*

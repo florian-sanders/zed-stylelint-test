@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write  # Update releases
+  contents: write
 
 concurrency:
   group: publish-release
@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Full history for building
+          fetch-depth: 0
 
       - name: Parse Extension Version
         id: version
@@ -34,92 +34,40 @@ jobs:
           echo "lsp_version=$LSP_VERSION" >> $GITHUB_OUTPUT
           echo "LSP version: $LSP_VERSION"
 
-      - name: Find Draft Release
-        id: find-draft
+      - name: Find Prerelease
+        id: find-prerelease
         uses: actions/github-script@v7
         with:
-           script: |
+          script: |
             const extVersion = '${{ steps.version.outputs.ext_version }}';
-            
-            // List all releases
+
             const { data: releases } = await github.rest.repos.listReleases({
               owner: context.repo.owner,
               repo: context.repo.repo,
               per_page: 100
             });
-            
-            // Find draft release whose tag matches the extension version
-            // (which defaults to the LSP version)
-            const draftRelease = releases.find(r => {
-              if (!r.draft) return false;
-              return r.tag_name === extVersion;
+
+            // Look for a prerelease or draft matching the extension version
+            const release = releases.find(r => {
+              return (r.prerelease || r.draft) && r.tag_name === extVersion;
             });
-            
-            if (!draftRelease) {
-              console.log(`No draft release found for v${extVersion}`);
+
+            if (!release) {
+              console.log(`No prerelease/draft found for v${extVersion}`);
               return null;
             }
-            
-            console.log(`Found draft release: ${draftRelease.html_url}`);
-            console.log(`Tag: ${draftRelease.tag_name}`);
+
+            console.log(`Found ${release.prerelease ? 'prerelease' : 'draft'}: ${release.html_url}`);
             return {
-              id: draftRelease.id,
-              tag: draftRelease.tag_name
+              id: release.id,
+              tag: release.tag_name,
+              prerelease: release.prerelease,
+              draft: release.draft
             };
 
-      - name: Publish Draft Release
-        if: steps.find-draft.outputs.result != 'null'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const releaseInfo = ${{ steps.find-draft.outputs.result }};
-            const extVersion = '${{ steps.version.outputs.ext_version }}';
-            
-            // Read changelog for this version
-            const fs = require('fs');
-            const changelogPath = 'CHANGELOG.md';
-            let releaseBody = '';
-            
-            if (fs.existsSync(changelogPath)) {
-              const changelog = fs.readFileSync(changelogPath, 'utf8');
-              // Extract section for this version
-              const versionMatch = changelog.match(
-                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
-              );
-              if (versionMatch) {
-                releaseBody = versionMatch[0].trim();
-              }
-            }
-            
-            // Update release: rename tag to proper version, publish, update body
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseInfo.id,
-              tag_name: extVersion,
-              name: `v${extVersion}`,
-              body: releaseBody || `Release v${extVersion}`,
-              draft: false
-            });
-            
-            console.log(`✅ Published release v${extVersion}`);
-            
-            // Delete the old tag if it was different
-            if (releaseInfo.tag !== extVersion) {
-              try {
-                await github.rest.git.deleteRef({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  ref: `tags/${releaseInfo.tag}`
-                });
-                console.log(`Deleted old tag: ${releaseInfo.tag}`);
-              } catch (e) {
-                console.log(`Could not delete old tag (may not exist): ${e.message}`);
-              }
-            }
+      # ── Path A: Prerelease found → build WASM, upload, promote ──
 
       - name: Install Rust
-        if: steps.find-draft.outputs.result == 'null'
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target wasm32-wasip1
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
@@ -128,43 +76,23 @@ jobs:
           cargo --version
 
       - name: Build Extension
-        if: steps.find-draft.outputs.result == 'null'
         run: |
           cargo build --release --target wasm32-wasip1
           cp target/wasm32-wasip1/release/zed_stylelint.wasm extension.wasm
           echo "Built extension.wasm"
 
-      - name: Create LSP Assets
-        if: steps.find-draft.outputs.result == 'null'
-        run: |
-          LSP_VERSION="${{ steps.lsp.outputs.lsp_version }}"
-          
-          # Check if lsp/ directory exists
-          if [ ! -d "lsp" ]; then
-            echo "Error: lsp/ directory not found"
-            exit 1
-          fi
-          
-          # Create zip
-          zip -r "stylelint-language-server-v${LSP_VERSION}.zip" lsp/
-          
-          # Create SHA256
-          sha256sum "stylelint-language-server-v${LSP_VERSION}.zip" > "stylelint-language-server-v${LSP_VERSION}.sha256"
-          
-          echo "Created LSP assets for v${LSP_VERSION}"
-
-      - name: Create New Release
-        if: steps.find-draft.outputs.result == 'null'
+      - name: Promote Prerelease
+        if: steps.find-prerelease.outputs.result != 'null'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
+            const releaseInfo = ${{ steps.find-prerelease.outputs.result }};
             const extVersion = '${{ steps.version.outputs.ext_version }}';
-            const lspVersion = '${{ steps.lsp.outputs.lsp_version }}';
-            
-            // Read changelog
-            const changelogPath = 'CHANGELOG.md';
+
+            // Read changelog for this version
             let releaseBody = '';
+            const changelogPath = 'CHANGELOG.md';
             if (fs.existsSync(changelogPath)) {
               const changelog = fs.readFileSync(changelogPath, 'utf8');
               const versionMatch = changelog.match(
@@ -174,7 +102,111 @@ jobs:
                 releaseBody = versionMatch[0].trim();
               }
             }
-            
+
+            // Upload extension.wasm to the existing release
+            const wasmData = fs.readFileSync('extension.wasm');
+            console.log(`Uploading extension.wasm (${wasmData.length} bytes)...`);
+
+            // Delete existing extension.wasm asset if present
+            const { data: release } = await github.rest.repos.getRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseInfo.id
+            });
+
+            const existingWasm = release.assets.find(a => a.name === 'extension.wasm');
+            if (existingWasm) {
+              await github.rest.repos.deleteReleaseAsset({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                asset_id: existingWasm.id
+              });
+              console.log('Deleted existing extension.wasm asset');
+            }
+
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseInfo.id,
+              name: 'extension.wasm',
+              data: wasmData,
+              headers: {
+                'content-type': 'application/wasm',
+                'content-length': wasmData.length
+              }
+            });
+            console.log('Uploaded extension.wasm');
+
+            // Promote: set draft=false, prerelease=false
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseInfo.id,
+              tag_name: extVersion,
+              name: `v${extVersion}`,
+              body: releaseBody || `Release v${extVersion}`,
+              draft: false,
+              prerelease: false
+            });
+
+            console.log(`✅ Promoted release v${extVersion}`);
+
+      # ── Path B: No prerelease → build everything from scratch ──
+
+      - name: Setup Node.js
+        if: steps.find-prerelease.outputs.result == 'null'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Build LSP
+        if: steps.find-prerelease.outputs.result == 'null'
+        uses: ./.github/actions/build-lsp
+        with:
+          version: ${{ steps.lsp.outputs.lsp_version }}
+
+      - name: Create Release with Assets
+        if: steps.find-prerelease.outputs.result == 'null'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const { execSync } = require('child_process');
+            const extVersion = '${{ steps.version.outputs.ext_version }}';
+            const lspVersion = '${{ steps.lsp.outputs.lsp_version }}';
+
+            // Read changelog
+            let releaseBody = '';
+            const changelogPath = 'CHANGELOG.md';
+            if (fs.existsSync(changelogPath)) {
+              const changelog = fs.readFileSync(changelogPath, 'utf8');
+              const versionMatch = changelog.match(
+                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
+              );
+              if (versionMatch) {
+                releaseBody = versionMatch[0].trim();
+              }
+            }
+
+            // Create zip from lsp/ directory
+            const zipName = `stylelint-language-server-v${lspVersion}.zip`;
+            const sha256Name = `stylelint-language-server-v${lspVersion}.sha256`;
+
+            // Verify lsp/ exists (build-lsp should have created it)
+            if (!fs.existsSync('lsp')) {
+              throw new Error('lsp/ directory not found after build-lsp action');
+            }
+
+            execSync(`zip -r "${zipName}" lsp/`);
+            console.log(`Created ${zipName}`);
+
+            // Calculate SHA256
+            const zipData = fs.readFileSync(zipName);
+            const sha256 = crypto.createHash('sha256').update(zipData).digest('hex');
+            fs.writeFileSync(sha256Name, `${sha256}  ${zipName}\n`);
+            console.log(`SHA256: ${sha256}`);
+
             // Create release
             const { data: release } = await github.rest.repos.createRelease({
               owner: context.repo.owner,
@@ -185,9 +217,9 @@ jobs:
               draft: false,
               prerelease: false
             });
-            
+
             console.log(`Created release v${extVersion}: ${release.html_url}`);
-            
+
             // Upload extension.wasm
             const wasmData = fs.readFileSync('extension.wasm');
             await github.rest.repos.uploadReleaseAsset({
@@ -202,10 +234,8 @@ jobs:
               }
             });
             console.log('Uploaded extension.wasm');
-            
+
             // Upload LSP zip
-            const zipName = `stylelint-language-server-v${lspVersion}.zip`;
-            const zipData = fs.readFileSync(zipName);
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -218,27 +248,26 @@ jobs:
               }
             });
             console.log(`Uploaded ${zipName}`);
-            
+
             // Upload SHA256
-            const shaName = `stylelint-language-server-v${lspVersion}.sha256`;
-            const shaData = fs.readFileSync(shaName);
+            const sha256Data = fs.readFileSync(sha256Name, 'utf-8');
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
-              name: shaName,
-              data: shaData,
+              name: sha256Name,
+              data: sha256Data,
               headers: {
                 'content-type': 'text/plain',
-                'content-length': shaData.length
+                'content-length': Buffer.byteLength(sha256Data)
               }
             });
-            console.log(`Uploaded ${shaName}`);
-            
+            console.log(`Uploaded ${sha256Name}`);
+
             console.log(`✅ Release v${extVersion} complete with LSP v${lspVersion}`);
 
       - name: Cleanup
-        if: steps.find-draft.outputs.result == 'null'
+        if: always()
         run: |
           rm -f extension.wasm
           rm -f stylelint-language-server-*.zip

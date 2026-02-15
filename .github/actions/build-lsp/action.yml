@@ -21,4 +21,4 @@ outputs:
     value: ${{ steps.build.outputs.committed }}
 runs:
   using: 'node24'
-  main: 'index.ts'
+  main: 'dist/index.mjs'

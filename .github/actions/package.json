@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "rolldown --config ./rolldown.config.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
+    "rolldown": "^1.0.0-beta.60",
     "typescript": "^5.9.3"
   }
 }

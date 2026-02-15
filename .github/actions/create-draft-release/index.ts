@@ -26,7 +26,14 @@ async function run(): Promise<void> {
     const version = core.getInput('version') || lspVersion;
     const token = core.getInput('github-token', { required: true });
     const isDraft = core.getInput('draft') !== 'false'; // Default true
+    const isPrerelease = core.getInput('prerelease') === 'true';
     const body = core.getInput('body') || `Draft release for LSP v${lspVersion}`;
+
+    // Warn if both draft and prerelease are set — prefer prerelease since
+    // draft assets are not publicly accessible (return 404 on direct URL)
+    if (isDraft && isPrerelease) {
+      core.warning('Both draft and prerelease are set. Using prerelease (not draft) since draft assets are not publicly downloadable.');
+    }
     
     const octokit = github.getOctokit(token);
     const { owner, repo } = github.context.repo;
@@ -98,15 +105,18 @@ async function run(): Promise<void> {
     } catch (error: any) {
       // Release doesn't exist, create it
       if (error.status === 404) {
-        core.info(`Creating new ${isDraft ? 'draft ' : ''}release v${version}...`);
+        // When prerelease is set, don't create as draft (assets must be public)
+        const effectiveDraft = isDraft && !isPrerelease;
+        const label = isPrerelease ? 'prerelease' : effectiveDraft ? 'draft ' : '';
+        core.info(`Creating new ${label}release v${version}...`);
         const { data: newRelease } = await octokit.rest.repos.createRelease({
           owner,
           repo,
           tag_name: version,
           name: `v${version}`,
           body,
-          draft: isDraft,
-          prerelease: false
+          draft: effectiveDraft,
+          prerelease: isPrerelease
         });
         release = newRelease;
       } else {
