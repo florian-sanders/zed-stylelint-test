@@ -33,7 +33,7 @@ impl StylelintExtension {
 
     fn server_script_path(&mut self, language_server_id: &LanguageServerId) -> Result<String> {
         let config = self.ensure_config();
-        let cache = Cache::new(&config.lsp_version)?;
+        let cache = Cache::new(&config.lsp_version);
 
         zed::set_language_server_installation_status(
             language_server_id,
