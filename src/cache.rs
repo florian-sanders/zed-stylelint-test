@@ -25,12 +25,8 @@ impl Cache {
         &self.cache_dir
     }
 
-    pub fn dist_dir(&self) -> PathBuf {
-        self.cache_dir.join("dist")
-    }
-
     pub fn server_path(&self) -> PathBuf {
-        self.dist_dir().join("start-server.js")
+        self.cache_dir.join("start-server.js")
     }
 
     pub fn find_cached_build(&self) -> Option<String> {
