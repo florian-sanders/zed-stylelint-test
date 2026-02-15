@@ -130,7 +130,8 @@ async function run(): Promise<void> {
       repo,
       release_id: release.id,
       name: tarballName,
-      data: tarballData,
+      // Buffer is accepted at runtime despite type declaration expecting string
+      data: tarballData as unknown as string,
       headers: {
         'content-type': 'application/gzip'
       }

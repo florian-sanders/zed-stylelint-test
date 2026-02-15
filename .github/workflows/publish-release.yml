@@ -65,21 +65,7 @@ jobs:
               draft: release.draft
             };
 
-      # ── Path A: Prerelease found → build WASM, upload, promote ──
-
-      - name: Install Rust
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target wasm32-wasip1
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-          source "$HOME/.cargo/env"
-          rustc --version
-          cargo --version
-
-      - name: Build Extension
-        run: |
-          cargo build --release --target wasm32-wasip1
-          cp target/wasm32-wasip1/release/zed_stylelint.wasm extension.wasm
-          echo "Built extension.wasm"
+      # ── Path A: Prerelease found → promote to full release ──
 
       - name: Get Release Body
         id: release-body
@@ -96,16 +82,11 @@ jobs:
 
       - name: Promote Prerelease
         if: steps.find-prerelease.outputs.result != 'null'
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/promote-prerelease
         with:
-          tag_name: ${{ steps.version.outputs.ext_version }}
-          name: v${{ steps.version.outputs.ext_version }}
+          version: ${{ steps.version.outputs.ext_version }}
           body: ${{ steps.release-body.outputs.body }}
-          draft: false
-          prerelease: false
-          files: extension.wasm
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Path B: No prerelease → build everything from scratch ──
 
@@ -136,23 +117,16 @@ jobs:
 
       - name: Release
         if: steps.find-prerelease.outputs.result == 'null'
-        uses: softprops/action-gh-release@v2
+        uses: ./.github/actions/publish-release
         with:
-          tag_name: ${{ steps.version.outputs.ext_version }}
-          name: v${{ steps.version.outputs.ext_version }}
+          version: ${{ steps.version.outputs.ext_version }}
+          lsp-version: ${{ steps.lsp.outputs.lsp_version }}
           body: ${{ steps.release-body.outputs.body }}
-          draft: false
-          prerelease: false
-          files: |
-            stylelint-language-server-${{ steps.lsp.outputs.lsp_version }}.tar.gz
-            stylelint-language-server-${{ steps.lsp.outputs.lsp_version }}.sha256
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup
         if: always()
         run: |
-          rm -f extension.wasm
           rm -f stylelint-language-server-*.tar.gz
           rm -f stylelint-language-server-*.sha256
           echo "Cleaned up build artifacts"
