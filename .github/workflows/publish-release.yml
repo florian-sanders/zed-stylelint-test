@@ -1,0 +1,246 @@
+name: Publish Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write  # Update releases
+
+concurrency:
+  group: publish-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for building
+
+      - name: Parse Extension Version
+        id: version
+        run: |
+          EXT_VERSION=$(grep "^version = " extension.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "ext_version=$EXT_VERSION" >> $GITHUB_OUTPUT
+          echo "Extension version: $EXT_VERSION"
+
+      - name: Parse LSP Version
+        id: lsp
+        run: |
+          LSP_VERSION=$(grep "lsp_required_version" extension.toml | sed 's/.*"\(.*\)".*/\1/')
+          echo "lsp_version=$LSP_VERSION" >> $GITHUB_OUTPUT
+          echo "LSP version: $LSP_VERSION"
+
+      - name: Find Draft Release
+        id: find-draft
+        uses: actions/github-script@v7
+        with:
+           script: |
+            const extVersion = '${{ steps.version.outputs.ext_version }}';
+            
+            // List all releases
+            const { data: releases } = await github.rest.repos.listReleases({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+            
+            // Find draft release whose tag matches the extension version
+            // (which defaults to the LSP version)
+            const draftRelease = releases.find(r => {
+              if (!r.draft) return false;
+              return r.tag_name === extVersion;
+            });
+            
+            if (!draftRelease) {
+              console.log(`No draft release found for v${extVersion}`);
+              return null;
+            }
+            
+            console.log(`Found draft release: ${draftRelease.html_url}`);
+            console.log(`Tag: ${draftRelease.tag_name}`);
+            return {
+              id: draftRelease.id,
+              tag: draftRelease.tag_name
+            };
+
+      - name: Publish Draft Release
+        if: steps.find-draft.outputs.result != 'null'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const releaseInfo = ${{ steps.find-draft.outputs.result }};
+            const extVersion = '${{ steps.version.outputs.ext_version }}';
+            
+            // Read changelog for this version
+            const fs = require('fs');
+            const changelogPath = 'CHANGELOG.md';
+            let releaseBody = '';
+            
+            if (fs.existsSync(changelogPath)) {
+              const changelog = fs.readFileSync(changelogPath, 'utf8');
+              // Extract section for this version
+              const versionMatch = changelog.match(
+                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
+              );
+              if (versionMatch) {
+                releaseBody = versionMatch[0].trim();
+              }
+            }
+            
+            // Update release: rename tag to proper version, publish, update body
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: releaseInfo.id,
+              tag_name: extVersion,
+              name: `v${extVersion}`,
+              body: releaseBody || `Release v${extVersion}`,
+              draft: false
+            });
+            
+            console.log(`✅ Published release v${extVersion}`);
+            
+            // Delete the old tag if it was different
+            if (releaseInfo.tag !== extVersion) {
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `tags/${releaseInfo.tag}`
+                });
+                console.log(`Deleted old tag: ${releaseInfo.tag}`);
+              } catch (e) {
+                console.log(`Could not delete old tag (may not exist): ${e.message}`);
+              }
+            }
+
+      - name: Install Rust
+        if: steps.find-draft.outputs.result == 'null'
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target wasm32-wasip1
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          source "$HOME/.cargo/env"
+          rustc --version
+          cargo --version
+
+      - name: Build Extension
+        if: steps.find-draft.outputs.result == 'null'
+        run: |
+          cargo build --release --target wasm32-wasip1
+          cp target/wasm32-wasip1/release/zed_stylelint.wasm extension.wasm
+          echo "Built extension.wasm"
+
+      - name: Create LSP Assets
+        if: steps.find-draft.outputs.result == 'null'
+        run: |
+          LSP_VERSION="${{ steps.lsp.outputs.lsp_version }}"
+          
+          # Check if lsp/ directory exists
+          if [ ! -d "lsp" ]; then
+            echo "Error: lsp/ directory not found"
+            exit 1
+          fi
+          
+          # Create zip
+          zip -r "stylelint-language-server-v${LSP_VERSION}.zip" lsp/
+          
+          # Create SHA256
+          sha256sum "stylelint-language-server-v${LSP_VERSION}.zip" > "stylelint-language-server-v${LSP_VERSION}.sha256"
+          
+          echo "Created LSP assets for v${LSP_VERSION}"
+
+      - name: Create New Release
+        if: steps.find-draft.outputs.result == 'null'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const extVersion = '${{ steps.version.outputs.ext_version }}';
+            const lspVersion = '${{ steps.lsp.outputs.lsp_version }}';
+            
+            // Read changelog
+            const changelogPath = 'CHANGELOG.md';
+            let releaseBody = '';
+            if (fs.existsSync(changelogPath)) {
+              const changelog = fs.readFileSync(changelogPath, 'utf8');
+              const versionMatch = changelog.match(
+                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
+              );
+              if (versionMatch) {
+                releaseBody = versionMatch[0].trim();
+              }
+            }
+            
+            // Create release
+            const { data: release } = await github.rest.repos.createRelease({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag_name: extVersion,
+              name: `v${extVersion}`,
+              body: releaseBody || `Release v${extVersion}`,
+              draft: false,
+              prerelease: false
+            });
+            
+            console.log(`Created release v${extVersion}: ${release.html_url}`);
+            
+            // Upload extension.wasm
+            const wasmData = fs.readFileSync('extension.wasm');
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: 'extension.wasm',
+              data: wasmData,
+              headers: {
+                'content-type': 'application/wasm',
+                'content-length': wasmData.length
+              }
+            });
+            console.log('Uploaded extension.wasm');
+            
+            // Upload LSP zip
+            const zipName = `stylelint-language-server-v${lspVersion}.zip`;
+            const zipData = fs.readFileSync(zipName);
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: zipName,
+              data: zipData,
+              headers: {
+                'content-type': 'application/zip',
+                'content-length': zipData.length
+              }
+            });
+            console.log(`Uploaded ${zipName}`);
+            
+            // Upload SHA256
+            const shaName = `stylelint-language-server-v${lspVersion}.sha256`;
+            const shaData = fs.readFileSync(shaName);
+            await github.rest.repos.uploadReleaseAsset({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              release_id: release.id,
+              name: shaName,
+              data: shaData,
+              headers: {
+                'content-type': 'text/plain',
+                'content-length': shaData.length
+              }
+            });
+            console.log(`Uploaded ${shaName}`);
+            
+            console.log(`✅ Release v${extVersion} complete with LSP v${lspVersion}`);
+
+      - name: Cleanup
+        if: steps.find-draft.outputs.result == 'null'
+        run: |
+          rm -f extension.wasm
+          rm -f stylelint-language-server-*.zip
+          rm -f stylelint-language-server-*.sha256
+          echo "Cleaned up build artifacts"
