@@ -71,7 +71,7 @@ impl LspDownloader {
         let url = self.config.asset_url();
         let dest_str = destination.to_string_lossy().to_string();
 
-        zed::download_file(&url, &dest_str, zed::DownloadedFileType::Zip)
+        zed::download_file(&url, &dest_str, zed::DownloadedFileType::GzipTar)
             .map_err(|e| format!("Download failed: {}", e))?;
 
         Ok(())

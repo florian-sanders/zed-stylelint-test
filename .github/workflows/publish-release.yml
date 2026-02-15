@@ -189,8 +189,8 @@ jobs:
               }
             }
 
-            // Create zip from lsp/ directory
-            const zipName = `stylelint-language-server-v${lspVersion}.zip`;
+            // Create tarball from lsp/ directory
+            const tarballName = `stylelint-language-server-v${lspVersion}.tar.gz`;
             const sha256Name = `stylelint-language-server-v${lspVersion}.sha256`;
 
             // Verify lsp/ exists (build-lsp should have created it)
@@ -198,13 +198,13 @@ jobs:
               throw new Error('lsp/ directory not found after build-lsp action');
             }
 
-            execSync(`zip -r "${zipName}" lsp/`);
-            console.log(`Created ${zipName}`);
+            execSync(`tar -czf "${tarballName}" lsp/`);
+            console.log(`Created ${tarballName}`);
 
             // Calculate SHA256
-            const zipData = fs.readFileSync(zipName);
-            const sha256 = crypto.createHash('sha256').update(zipData).digest('hex');
-            fs.writeFileSync(sha256Name, `${sha256}  ${zipName}\n`);
+            const tarData = fs.readFileSync(tarballName);
+            const sha256 = crypto.createHash('sha256').update(tarData).digest('hex');
+            fs.writeFileSync(sha256Name, `${sha256}  ${tarballName}\n`);
             console.log(`SHA256: ${sha256}`);
 
             // Create release
@@ -235,19 +235,19 @@ jobs:
             });
             console.log('Uploaded extension.wasm');
 
-            // Upload LSP zip
+            // Upload LSP tarball
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
-              name: zipName,
-              data: zipData,
+              name: tarballName,
+              data: tarData,
               headers: {
-                'content-type': 'application/zip',
-                'content-length': zipData.length
+                'content-type': 'application/gzip',
+                'content-length': tarData.length
               }
             });
-            console.log(`Uploaded ${zipName}`);
+            console.log(`Uploaded ${tarballName}`);
 
             // Upload SHA256
             const sha256Data = fs.readFileSync(sha256Name, 'utf-8');
@@ -270,6 +270,6 @@ jobs:
         if: always()
         run: |
           rm -f extension.wasm
-          rm -f stylelint-language-server-*.zip
+          rm -f stylelint-language-server-*.tar.gz
           rm -f stylelint-language-server-*.sha256
           echo "Cleaned up build artifacts"

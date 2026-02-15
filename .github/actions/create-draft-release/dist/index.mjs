@@ -19852,13 +19852,13 @@ async function execWithLog(command, args, options) {
 
 //#endregion
 //#region create-draft-release/index.ts
-async function createZip(sourceDir, outputPath) {
+async function createTarball(sourceDir, outputPath) {
 	const parentDir = path.dirname(outputPath);
 	await fs.mkdir(parentDir, { recursive: true });
 	const absoluteOutput = path.resolve(outputPath);
-	import_core.info(`Creating zip: ${outputPath} from ${sourceDir}`);
-	await execWithLog("zip", [
-		"-r",
+	import_core.info(`Creating tarball: ${outputPath} from ${sourceDir}`);
+	await execWithLog("tar", [
+		"-czf",
 		absoluteOutput,
 		"."
 	], { cwd: sourceDir });
@@ -19878,22 +19878,22 @@ async function run() {
 		if (isDraft && isPrerelease) import_core.warning("Both draft and prerelease are set. Using prerelease (not draft) since draft assets are not publicly downloadable.");
 		const octokit = import_github.getOctokit(token);
 		const { owner, repo } = import_github.context.repo;
-		const zipName = `stylelint-language-server-v${lspVersion}.zip`;
+		const tarballName = `stylelint-language-server-v${lspVersion}.tar.gz`;
 		const sha256Name = `stylelint-language-server-v${lspVersion}.sha256`;
 		try {
 			await fs.access("lsp");
 		} catch {
 			throw new Error("lsp/ directory not found. Run build-lsp action first.");
 		}
-		import_core.info("Creating zip archive...");
-		await createZip("lsp", zipName);
-		const zipStat = await fs.stat(zipName);
-		import_core.info(`Zip created: ${zipName} (${(zipStat.size / 1024).toFixed(2)} KB)`);
+		import_core.info("Creating tarball archive...");
+		await createTarball("lsp", tarballName);
+		const tarballStat = await fs.stat(tarballName);
+		import_core.info(`Tarball created: ${tarballName} (${(tarballStat.size / 1024).toFixed(2)} KB)`);
 		import_core.info("Calculating SHA256 checksum...");
-		const sha256 = await calculateSHA256(zipName);
-		await fs.writeFile(sha256Name, `${sha256}  ${zipName}\n`);
+		const sha256 = await calculateSHA256(tarballName);
+		await fs.writeFile(sha256Name, `${sha256}  ${tarballName}\n`);
 		import_core.info(`SHA256: ${sha256}`);
-		const zipData = await fs.readFile(zipName, "binary");
+		const tarballData = await fs.readFile(tarballName, "binary");
 		const sha256Data = await fs.readFile(sha256Name, "utf-8");
 		let release;
 		try {
@@ -19904,14 +19904,14 @@ async function run() {
 			});
 			release = existingRelease;
 			import_core.info(`Found existing release: ${release.html_url}`);
-			const existingZipAsset = release.assets.find((a) => a.name === zipName);
+			const existingTarballAsset = release.assets.find((a) => a.name === tarballName);
 			const existingShaAsset = release.assets.find((a) => a.name === sha256Name);
-			if (existingZipAsset) {
-				import_core.info(`Deleting existing asset: ${zipName}`);
+			if (existingTarballAsset) {
+				import_core.info(`Deleting existing asset: ${tarballName}`);
 				await octokit.rest.repos.deleteReleaseAsset({
 					owner,
 					repo,
-					asset_id: existingZipAsset.id
+					asset_id: existingTarballAsset.id
 				});
 			}
 			if (existingShaAsset) {
@@ -19939,14 +19939,14 @@ async function run() {
 				release = newRelease;
 			} else throw error;
 		}
-		import_core.info(`Uploading ${zipName}...`);
+		import_core.info(`Uploading ${tarballName}...`);
 		await octokit.rest.repos.uploadReleaseAsset({
 			owner,
 			repo,
 			release_id: release.id,
-			name: zipName,
-			data: zipData,
-			headers: { "content-type": "application/zip" }
+			name: tarballName,
+			data: tarballData,
+			headers: { "content-type": "application/gzip" }
 		});
 		import_core.info(`Uploading ${sha256Name}...`);
 		await octokit.rest.repos.uploadReleaseAsset({
@@ -19962,7 +19962,7 @@ async function run() {
 		import_core.setOutput("upload-url", release.upload_url);
 		import_core.info(`✅ Release ready: ${release.html_url}`);
 		import_core.info("Cleaning up local files...");
-		await fs.unlink(zipName);
+		await fs.unlink(tarballName);
 		await fs.unlink(sha256Name);
 	} catch (error) {
 		import_core.setFailed(error instanceof Error ? error.message : "Unknown error");

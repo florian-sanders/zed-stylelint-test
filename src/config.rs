@@ -20,11 +20,11 @@ impl LspConfig {
         }
     }
 
-    /// Build the download URL for the LSP zip asset.
+    /// Build the download URL for the LSP tarball asset.
     /// The release tag matches the extension version (which defaults to the LSP version).
     pub fn asset_url(&self) -> String {
         format!(
-            "https://github.com/{}/releases/download/{}/stylelint-language-server-v{}.zip",
+            "https://github.com/{}/releases/download/{}/stylelint-language-server-v{}.tar.gz",
             self.github_repo, self.extension_version, self.lsp_version
         )
     }

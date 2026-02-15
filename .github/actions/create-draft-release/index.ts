@@ -5,17 +5,13 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { execWithLog } from '../shared/src/exec.js';
 
-async function createZip(sourceDir: string, outputPath: string): Promise<void> {
-  // Ensure parent directory exists
+async function createTarball(sourceDir: string, outputPath: string): Promise<void> {
   const parentDir = path.dirname(outputPath);
   await fs.mkdir(parentDir, { recursive: true });
   
-  // Use system zip command (available on ubuntu-latest)
-  // Resolve to absolute path so the zip is created relative to the caller's
-  // working directory, not relative to `cwd` (sourceDir).
   const absoluteOutput = path.resolve(outputPath);
-  core.info(`Creating zip: ${outputPath} from ${sourceDir}`);
-  await execWithLog('zip', ['-r', absoluteOutput, '.'], { cwd: sourceDir });
+  core.info(`Creating tarball: ${outputPath} from ${sourceDir}`);
+  await execWithLog('tar', ['-czf', absoluteOutput, '.'], { cwd: sourceDir });
 }
 
 async function calculateSHA256(filePath: string): Promise<string> {
@@ -42,7 +38,7 @@ async function run(): Promise<void> {
     const { owner, repo } = github.context.repo;
 
     // Create asset file paths
-    const zipName = `stylelint-language-server-v${lspVersion}.zip`;
+    const tarballName = `stylelint-language-server-v${lspVersion}.tar.gz`;
     const sha256Name = `stylelint-language-server-v${lspVersion}.sha256`;
     
     // Verify lsp/ directory exists
@@ -52,23 +48,23 @@ async function run(): Promise<void> {
       throw new Error('lsp/ directory not found. Run build-lsp action first.');
     }
 
-    // Create zip archive
-    core.info('Creating zip archive...');
-    await createZip('lsp', zipName);
+    // Create tarball archive
+    core.info('Creating tarball archive...');
+    await createTarball('lsp', tarballName);
     
     // Get file size for logging
-    const zipStat = await fs.stat(zipName);
-    core.info(`Zip created: ${zipName} (${(zipStat.size / 1024).toFixed(2)} KB)`);
+    const tarballStat = await fs.stat(tarballName);
+    core.info(`Tarball created: ${tarballName} (${(tarballStat.size / 1024).toFixed(2)} KB)`);
     
     // Calculate SHA256
     core.info('Calculating SHA256 checksum...');
-    const sha256 = await calculateSHA256(zipName);
-    await fs.writeFile(sha256Name, `${sha256}  ${zipName}\n`);
+    const sha256 = await calculateSHA256(tarballName);
+    await fs.writeFile(sha256Name, `${sha256}  ${tarballName}\n`);
     core.info(`SHA256: ${sha256}`);
 
     // Read asset files as binary strings (Octokit types declare data as string,
     // but the runtime sends it as raw binary via application/octet-stream)
-    const zipData = await fs.readFile(zipName, 'binary');
+    const tarballData = await fs.readFile(tarballName, 'binary');
     const sha256Data = await fs.readFile(sha256Name, 'utf-8');
 
     // Try to find existing release
@@ -84,15 +80,15 @@ async function run(): Promise<void> {
       core.info(`Found existing release: ${release.html_url}`);
       
       // Check if assets already exist and delete them
-      const existingZipAsset = release.assets.find(a => a.name === zipName);
+      const existingTarballAsset = release.assets.find(a => a.name === tarballName);
       const existingShaAsset = release.assets.find(a => a.name === sha256Name);
       
-      if (existingZipAsset) {
-        core.info(`Deleting existing asset: ${zipName}`);
+      if (existingTarballAsset) {
+        core.info(`Deleting existing asset: ${tarballName}`);
         await octokit.rest.repos.deleteReleaseAsset({
           owner,
           repo,
-          asset_id: existingZipAsset.id
+          asset_id: existingTarballAsset.id
         });
       }
       
@@ -127,16 +123,16 @@ async function run(): Promise<void> {
       }
     }
 
-    // Upload zip asset
-    core.info(`Uploading ${zipName}...`);
+    // Upload tarball asset
+    core.info(`Uploading ${tarballName}...`);
     await octokit.rest.repos.uploadReleaseAsset({
       owner,
       repo,
       release_id: release.id,
-      name: zipName,
-      data: zipData,
+      name: tarballName,
+      data: tarballData,
       headers: {
-        'content-type': 'application/zip'
+        'content-type': 'application/gzip'
       }
     });
 
@@ -160,7 +156,7 @@ async function run(): Promise<void> {
 
     // Cleanup local files
     core.info('Cleaning up local files...');
-    await fs.unlink(zipName);
+    await fs.unlink(tarballName);
     await fs.unlink(sha256Name);
     
   } catch (error) {
