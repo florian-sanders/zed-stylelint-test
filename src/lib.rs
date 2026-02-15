@@ -1,54 +1,70 @@
-use std::{env, fs, fs::File, io::BufReader};
+mod cache;
+mod config;
+mod lsp_downloader;
+
 use zed::settings::LspSettings;
-use zed_extension_api::{self as zed, LanguageServerId, Result, serde_json};
+use zed_extension_api::{self as zed, LanguageServerId, Result};
 
-const REQUIRED_VERSION: &str = "1.6.0";
-const SERVER_PATH: &str = "stylelint-vsix/extension/dist/start-server.js";
-const VERSION_PATH: &str = "stylelint-vsix/extension/package.json";
-const STYLELINT_OPEN_VSX_URL: &str = "https://open-vsx.org/api/stylelint/vscode-stylelint";
+use crate::cache::Cache;
+use crate::config::LspConfig;
+use crate::lsp_downloader::LspDownloader;
 
-struct StylelintExtension;
+pub struct StylelintExtension {
+    config: Option<LspConfig>,
+}
+
+impl Default for StylelintExtension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl StylelintExtension {
-    fn read_current_version(&self) -> Option<String> {
-        let file = File::open(VERSION_PATH).ok()?;
-        let reader = BufReader::new(file);
-        let package_json: serde_json::Value = serde_json::from_reader(reader).ok()?;
-        package_json["version"].as_str().map(|s| s.to_string())
+    pub fn new() -> Self {
+        Self { config: None }
     }
 
-    fn server_script_path(&self, language_server_id: &LanguageServerId) -> Result<String> {
-        let current_version = self.read_current_version();
+    fn ensure_config(&mut self) -> Result<&LspConfig> {
+        if self.config.is_none() {
+            self.config = Some(LspConfig::from_extension_toml()?);
+        }
+        Ok(self.config.as_ref().unwrap())
+    }
 
-        let server_exists = fs::metadata(SERVER_PATH).map_or(false, |stat| stat.is_file());
+    fn server_script_path(&mut self, language_server_id: &LanguageServerId) -> Result<String> {
+        let config = self.ensure_config()?;
+        let cache = Cache::new(&config.lsp_version)?;
 
-        if current_version.as_deref() != Some(REQUIRED_VERSION) || !server_exists {
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+        );
+
+        if let Some(cached_path) = cache.find_cached_build() {
             zed::set_language_server_installation_status(
                 language_server_id,
-                &zed::LanguageServerInstallationStatus::Downloading,
+                &zed::LanguageServerInstallationStatus::None,
             );
-
-            let download_url = format!(
-                "{baseUrl}/{REQUIRED_VERSION}/file/stylelint.vscode-stylelint-{version}.vsix",
-                baseUrl = STYLELINT_OPEN_VSX_URL,
-                version = REQUIRED_VERSION
-            );
-
-            zed::download_file(
-                &download_url,
-                "stylelint-vsix",
-                zed::DownloadedFileType::Zip,
-            )
-            .map_err(|e| format!("failed to download file: {e}"))?;
+            return Ok(cached_path);
         }
 
-        Ok(SERVER_PATH.to_string())
+        let downloader = LspDownloader::new(config.clone());
+        let server_path = downloader
+            .download_and_verify(&cache, language_server_id)
+            .map_err(|e| e.to_string())?;
+
+        zed::set_language_server_installation_status(
+            language_server_id,
+            &zed::LanguageServerInstallationStatus::None,
+        );
+
+        Ok(server_path)
     }
 }
 
 impl zed::Extension for StylelintExtension {
     fn new() -> Self {
-        Self
+        Self::new()
     }
 
     fn language_server_command(
@@ -57,16 +73,10 @@ impl zed::Extension for StylelintExtension {
         _worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
         let server_path = self.server_script_path(language_server_id)?;
+
         Ok(zed::Command {
             command: zed::node_binary_path()?,
-            args: vec![
-                env::current_dir()
-                    .unwrap()
-                    .join(&server_path)
-                    .to_string_lossy()
-                    .to_string(),
-                "--stdio".to_string(),
-            ],
+            args: vec![server_path, "--stdio".to_string()],
             env: Default::default(),
         })
     }
@@ -80,8 +90,9 @@ impl zed::Extension for StylelintExtension {
             .ok()
             .and_then(|lsp_settings| lsp_settings.settings.clone())
             .unwrap_or_default();
+
         Ok(Some(settings))
     }
 }
 
-zed::register_extension!(StylelintExtension);
+zed_extension_api::register_extension!(StylelintExtension);
