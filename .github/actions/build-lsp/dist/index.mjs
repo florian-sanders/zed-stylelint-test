@@ -16968,7 +16968,7 @@ async function run() {
 		const version = import_core.getInput("version", { required: true });
 		const gitUserName = import_core.getInput("git-user-name");
 		const gitUserEmail = import_core.getInput("git-user-email");
-		const tag = `v${version}`;
+		const tag = version;
 		import_core.info(`Building LSP version ${version} (${tag})`);
 		const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "vscode-stylelint-"));
 		import_core.info(`Build directory: ${tempDir}`);

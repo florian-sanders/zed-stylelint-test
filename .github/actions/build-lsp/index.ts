@@ -11,7 +11,7 @@ async function run(): Promise<void> {
     const version = core.getInput('version', { required: true });
     const gitUserName = core.getInput('git-user-name');
     const gitUserEmail = core.getInput('git-user-email');
-    const tag = `v${version}`;
+    const tag = version;
     
     core.info(`Building LSP version ${version} (${tag})`);
     
