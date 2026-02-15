@@ -81,75 +81,31 @@ jobs:
           cp target/wasm32-wasip1/release/zed_stylelint.wasm extension.wasm
           echo "Built extension.wasm"
 
+      - name: Get Release Body
+        id: release-body
+        run: |
+          EXT_VERSION='${{ steps.version.outputs.ext_version }}'
+          if [ -f CHANGELOG.md ]; then
+            BODY=$(awk -v ver="$EXT_VERSION" '/^## \[?v?/ { if (p) exit; p=1; next } p' CHANGELOG.md | head -20)
+            echo "body<<EOF" >> $GITHUB_OUTPUT
+            echo "$BODY" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "body=Release v$EXT_VERSION" >> $GITHUB_OUTPUT
+          fi
+
       - name: Promote Prerelease
         if: steps.find-prerelease.outputs.result != 'null'
-        uses: actions/github-script@v7
+        uses: softprops/action-gh-release@v2
         with:
-          script: |
-            const fs = require('fs');
-            const releaseInfo = ${{ steps.find-prerelease.outputs.result }};
-            const extVersion = '${{ steps.version.outputs.ext_version }}';
-
-            // Read changelog for this version
-            let releaseBody = '';
-            const changelogPath = 'CHANGELOG.md';
-            if (fs.existsSync(changelogPath)) {
-              const changelog = fs.readFileSync(changelogPath, 'utf8');
-              const versionMatch = changelog.match(
-                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
-              );
-              if (versionMatch) {
-                releaseBody = versionMatch[0].trim();
-              }
-            }
-
-            // Upload extension.wasm to the existing release
-            const wasmData = fs.readFileSync('extension.wasm');
-            console.log(`Uploading extension.wasm (${wasmData.length} bytes)...`);
-
-            // Delete existing extension.wasm asset if present
-            const { data: release } = await github.rest.repos.getRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseInfo.id
-            });
-
-            const existingWasm = release.assets.find(a => a.name === 'extension.wasm');
-            if (existingWasm) {
-              await github.rest.repos.deleteReleaseAsset({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                asset_id: existingWasm.id
-              });
-              console.log('Deleted existing extension.wasm asset');
-            }
-
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseInfo.id,
-              name: 'extension.wasm',
-              data: wasmData,
-              headers: {
-                'content-type': 'application/wasm',
-                'content-length': wasmData.length
-              }
-            });
-            console.log('Uploaded extension.wasm');
-
-            // Promote: set draft=false, prerelease=false
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: releaseInfo.id,
-              tag_name: extVersion,
-              name: `v${extVersion}`,
-              body: releaseBody || `Release v${extVersion}`,
-              draft: false,
-              prerelease: false
-            });
-
-            console.log(`✅ Promoted release v${extVersion}`);
+          tag_name: ${{ steps.version.outputs.ext_version }}
+          name: v${{ steps.version.outputs.ext_version }}
+          body: ${{ steps.release-body.outputs.body }}
+          draft: false
+          prerelease: false
+          files: extension.wasm
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # ── Path B: No prerelease → build everything from scratch ──
 
@@ -167,103 +123,31 @@ jobs:
 
       - name: Create Release with Assets
         if: steps.find-prerelease.outputs.result == 'null'
-        uses: actions/github-script@v7
+        run: |
+          LSP_VERSION='${{ steps.lsp.outputs.lsp_version }}'
+          tar -czf "stylelint-language-server-v${LSP_VERSION}.tar.gz" lsp/
+          echo "Created stylelint-language-server-v${LSP_VERSION}.tar.gz"
+
+      - name: Create SHA256
+        if: steps.find-prerelease.outputs.result == 'null'
+        run: |
+          LSP_VERSION='${{ steps.lsp.outputs.lsp_version }}'
+          sha256sum "stylelint-language-server-v${LSP_VERSION}.tar.gz" > "stylelint-language-server-v${LSP_VERSION}.sha256"
+
+      - name: Release
+        if: steps.find-prerelease.outputs.result == 'null'
+        uses: softprops/action-gh-release@v2
         with:
-          script: |
-            const fs = require('fs');
-            const crypto = require('crypto');
-            const { execSync } = require('child_process');
-            const extVersion = '${{ steps.version.outputs.ext_version }}';
-            const lspVersion = '${{ steps.lsp.outputs.lsp_version }}';
-
-            // Read changelog
-            let releaseBody = '';
-            const changelogPath = 'CHANGELOG.md';
-            if (fs.existsSync(changelogPath)) {
-              const changelog = fs.readFileSync(changelogPath, 'utf8');
-              const versionMatch = changelog.match(
-                new RegExp(`## \\[?v?${extVersion}\\]?.*?(?=\\n## \\[|$)`, 's')
-              );
-              if (versionMatch) {
-                releaseBody = versionMatch[0].trim();
-              }
-            }
-
-            // Create tarball from lsp/ directory
-            const tarballName = `stylelint-language-server-v${lspVersion}.tar.gz`;
-            const sha256Name = `stylelint-language-server-v${lspVersion}.sha256`;
-
-            // Verify lsp/ exists (build-lsp should have created it)
-            if (!fs.existsSync('lsp')) {
-              throw new Error('lsp/ directory not found after build-lsp action');
-            }
-
-            execSync(`tar -czf "${tarballName}" lsp/`);
-            console.log(`Created ${tarballName}`);
-
-            // Calculate SHA256
-            const tarData = fs.readFileSync(tarballName);
-            const sha256 = crypto.createHash('sha256').update(tarData).digest('hex');
-            fs.writeFileSync(sha256Name, `${sha256}  ${tarballName}\n`);
-            console.log(`SHA256: ${sha256}`);
-
-            // Create release
-            const { data: release } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: extVersion,
-              name: `v${extVersion}`,
-              body: releaseBody || `Release v${extVersion}`,
-              draft: false,
-              prerelease: false
-            });
-
-            console.log(`Created release v${extVersion}: ${release.html_url}`);
-
-            // Upload extension.wasm
-            const wasmData = fs.readFileSync('extension.wasm');
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              name: 'extension.wasm',
-              data: wasmData,
-              headers: {
-                'content-type': 'application/wasm',
-                'content-length': wasmData.length
-              }
-            });
-            console.log('Uploaded extension.wasm');
-
-            // Upload LSP tarball using upload_url (recommended by GitHub)
-            const tarData = fs.readFileSync(tarballName);
-            const uploadUrl = release.upload_url.replace('{?name,label}', `?name=${tarballName}`);
-            await fetch(uploadUrl, {
-              method: 'POST',
-              headers: {
-                'content-type': 'application/gzip',
-                'content-length': tarData.length
-              },
-              body: tarData
-            });
-            console.log(`Uploaded ${tarballName}`);
-
-            // Upload SHA256
-            const sha256Data = fs.readFileSync(sha256Name, 'utf-8');
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              name: sha256Name,
-              data: sha256Data,
-              headers: {
-                'content-type': 'text/plain',
-                'content-length': Buffer.byteLength(sha256Data)
-              }
-            });
-            console.log(`Uploaded ${sha256Name}`);
-
-            console.log(`✅ Release v${extVersion} complete with LSP v${lspVersion}`);
+          tag_name: ${{ steps.version.outputs.ext_version }}
+          name: v${{ steps.version.outputs.ext_version }}
+          body: ${{ steps.release-body.outputs.body }}
+          draft: false
+          prerelease: false
+          files: |
+            stylelint-language-server-${{ steps.lsp.outputs.lsp_version }}.tar.gz
+            stylelint-language-server-${{ steps.lsp.outputs.lsp_version }}.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup
         if: always()

@@ -62,9 +62,9 @@ async function run(): Promise<void> {
     await fs.writeFile(sha256Name, `${sha256}  ${tarballName}\n`);
     core.info(`SHA256: ${sha256}`);
 
-    // Read asset files as binary strings (Octokit types declare data as string,
-    // but the runtime sends it as raw binary via application/octet-stream)
-    const tarballData = await fs.readFile(tarballName, 'binary');
+    // Read tarball as Buffer (not string) to preserve binary data integrity.
+    // Octokit's uploadReleaseAsset accepts Buffer for binary files.
+    const tarballData = await fs.readFile(tarballName);
     const sha256Data = await fs.readFile(sha256Name, 'utf-8');
 
     // Try to find existing release

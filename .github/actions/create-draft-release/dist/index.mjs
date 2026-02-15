@@ -19893,7 +19893,7 @@ async function run() {
 		const sha256 = await calculateSHA256(tarballName);
 		await fs.writeFile(sha256Name, `${sha256}  ${tarballName}\n`);
 		import_core.info(`SHA256: ${sha256}`);
-		const tarballData = await fs.readFile(tarballName, "binary");
+		const tarballData = await fs.readFile(tarballName);
 		const sha256Data = await fs.readFile(sha256Name, "utf-8");
 		let release;
 		try {
