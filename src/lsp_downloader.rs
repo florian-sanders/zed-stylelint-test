@@ -1,7 +1,9 @@
+use std::fs;
+
+use zed_extension_api::{self as zed, LanguageServerId};
+
 use crate::cache::Cache;
 use crate::config::LspConfig;
-use std::path::Path;
-use zed_extension_api::{self as zed, LanguageServerId};
 
 pub struct LspDownloader {
     config: LspConfig,
@@ -44,34 +46,30 @@ impl LspDownloader {
             &zed::LanguageServerInstallationStatus::Downloading,
         );
 
-        self.download_and_extract(cache.cache_dir())
+        self.download_and_extract(cache.version_dir())
             .map_err(|e| DownloadError::Network {
                 url: self.config.asset_url(),
                 message: e,
             })?;
 
-        // Verify server file exists
-        let server_path = cache.server_path();
-        if !server_path.exists() {
+        // Verify server file exists (use relative path for WASM sandbox fs check)
+        let relative_path = format!("{}/start-server.js", cache.version_dir());
+        if !fs::metadata(&relative_path).map_or(false, |m| m.is_file()) {
             return Err(DownloadError::Extraction {
-                message: format!(
-                    "Server file not found at {:?} after extraction",
-                    server_path
-                ),
+                message: format!("Server file not found at {} after extraction", relative_path),
             });
         }
 
         // Cleanup old versions to save space
-        let _ = cache.cleanup_old_versions();
+        cache.cleanup_old_versions();
 
-        Ok(server_path.to_string_lossy().to_string())
+        Ok(cache.server_path())
     }
 
-    fn download_and_extract(&self, destination: &Path) -> Result<(), String> {
+    fn download_and_extract(&self, destination: &str) -> Result<(), String> {
         let url = self.config.asset_url();
-        let dest_str = destination.to_string_lossy().to_string();
 
-        zed::download_file(&url, &dest_str, zed::DownloadedFileType::GzipTar)
+        zed::download_file(&url, destination, zed::DownloadedFileType::GzipTar)
             .map_err(|e| format!("Download failed: {}", e))?;
 
         Ok(())
