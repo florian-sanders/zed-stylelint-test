@@ -235,20 +235,16 @@ jobs:
             });
             console.log('Uploaded extension.wasm');
 
-            // Upload LSP tarball
+            // Upload LSP tarball using upload_url (recommended by GitHub)
             const tarData = fs.readFileSync(tarballName);
-            const tarBase64 = tarData.toString('base64');
-            await github.rest.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.id,
-              name: tarballName,
-              data: tarBase64,
+            const uploadUrl = release.upload_url.replace('{?name,label}', `?name=${tarballName}`);
+            await fetch(uploadUrl, {
+              method: 'POST',
               headers: {
                 'content-type': 'application/gzip',
-                'Content-Transfer-Encoding': 'base64',
-                'content-length': tarBase64.length
-              }
+                'content-length': tarData.length
+              },
+              body: tarData
             });
             console.log(`Uploaded ${tarballName}`);
 
