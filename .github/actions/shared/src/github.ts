@@ -24,12 +24,12 @@ export async function getLatestLspRelease(octokit: Octokit): Promise<LspReleaseI
 }
 
 export async function findOpenLspUpdatePr(octokit: Octokit, owner: string, repo: string): Promise<number | null> {
-  const { data: prs } = await octokit.rest.pulls.list({
+  const prs = await octokit.paginate(octokit.rest.pulls.list, {
     owner,
     repo,
-    state: 'open'
+    state: 'open',
   });
-  
+
   const lspPr = prs.find((pr: { head: { ref: string } }) => pr.head.ref.startsWith('update-lsp-'));
   return lspPr ? lspPr.number : null;
 }

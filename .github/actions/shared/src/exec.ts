@@ -15,14 +15,21 @@ export async function getExecOutput(
   args?: string[],
   options?: exec.ExecOptions
 ): Promise<string> {
-  let output = '';
+  let stdout = '';
+  let stderr = '';
   await exec.exec(command, args, {
     ...options,
     listeners: {
       stdout: (data: Buffer) => {
-        output += data.toString();
-      }
-    }
+        stdout += data.toString();
+      },
+      stderr: (data: Buffer) => {
+        stderr += data.toString();
+      },
+    },
   });
-  return output.trim();
+  if (stderr) {
+    core.debug(`stderr: ${stderr.trim()}`);
+  }
+  return stdout.trim();
 }
