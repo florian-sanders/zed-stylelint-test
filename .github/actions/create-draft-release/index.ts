@@ -11,8 +11,11 @@ async function createZip(sourceDir: string, outputPath: string): Promise<void> {
   await fs.mkdir(parentDir, { recursive: true });
   
   // Use system zip command (available on ubuntu-latest)
+  // Resolve to absolute path so the zip is created relative to the caller's
+  // working directory, not relative to `cwd` (sourceDir).
+  const absoluteOutput = path.resolve(outputPath);
   core.info(`Creating zip: ${outputPath} from ${sourceDir}`);
-  await execWithLog('zip', ['-r', outputPath, '.'], { cwd: sourceDir });
+  await execWithLog('zip', ['-r', absoluteOutput, '.'], { cwd: sourceDir });
 }
 
 async function calculateSHA256(filePath: string): Promise<string> {

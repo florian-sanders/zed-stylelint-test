@@ -19855,10 +19855,11 @@ async function execWithLog(command, args, options) {
 async function createZip(sourceDir, outputPath) {
 	const parentDir = path.dirname(outputPath);
 	await fs.mkdir(parentDir, { recursive: true });
+	const absoluteOutput = path.resolve(outputPath);
 	import_core.info(`Creating zip: ${outputPath} from ${sourceDir}`);
 	await execWithLog("zip", [
 		"-r",
-		outputPath,
+		absoluteOutput,
 		"."
 	], { cwd: sourceDir });
 }
