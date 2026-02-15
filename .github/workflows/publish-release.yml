@@ -236,15 +236,18 @@ jobs:
             console.log('Uploaded extension.wasm');
 
             // Upload LSP tarball
+            const tarData = fs.readFileSync(tarballName);
+            const tarBase64 = tarData.toString('base64');
             await github.rest.repos.uploadReleaseAsset({
               owner: context.repo.owner,
               repo: context.repo.repo,
               release_id: release.id,
               name: tarballName,
-              data: tarData,
+              data: tarBase64,
               headers: {
                 'content-type': 'application/gzip',
-                'content-length': tarData.length
+                'Content-Transfer-Encoding': 'base64',
+                'content-length': tarBase64.length
               }
             });
             console.log(`Uploaded ${tarballName}`);
