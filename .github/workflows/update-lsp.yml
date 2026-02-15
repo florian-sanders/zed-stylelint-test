@@ -82,12 +82,19 @@ jobs:
           # Update Cargo.toml version to match
           sed -i "s/^version = \".*\"/version = \"${VERSION}\"/" Cargo.toml
 
+          # Update compile-time constants in config.rs
+          sed -i "s/const EXTENSION_VERSION: &str = \".*\"/const EXTENSION_VERSION: \&str = \"${VERSION}\"/" src/config.rs
+          sed -i "s/const LSP_VERSION: &str = \".*\"/const LSP_VERSION: \&str = \"${VERSION}\"/" src/config.rs
+
           echo "Updated versions to ${VERSION}"
           echo "extension.toml:"
           cat extension.toml
           echo ""
           echo "Cargo.toml (first 10 lines):"
           head -10 Cargo.toml
+          echo ""
+          echo "config.rs constants:"
+          grep "const.*VERSION" src/config.rs
 
       - name: Commit Version Update
         if: steps.version.outputs.update_needed == 'true'
@@ -95,7 +102,7 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           git config user.name 'github-actions[bot]'
           git config user.email 'github-actions[bot]@users.noreply.github.com'
-          git add extension.toml Cargo.toml Cargo.lock
+          git add extension.toml Cargo.toml Cargo.lock src/config.rs
           git diff --cached --quiet && echo "No version changes to commit" || \
             git commit -m "chore: bump version to v${VERSION}"
 

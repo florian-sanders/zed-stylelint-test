@@ -24,15 +24,15 @@ impl StylelintExtension {
         Self { config: None }
     }
 
-    fn ensure_config(&mut self) -> Result<&LspConfig> {
+    fn ensure_config(&mut self) -> &LspConfig {
         if self.config.is_none() {
-            self.config = Some(LspConfig::from_extension_toml()?);
+            self.config = Some(LspConfig::new());
         }
-        Ok(self.config.as_ref().unwrap())
+        self.config.as_ref().unwrap()
     }
 
     fn server_script_path(&mut self, language_server_id: &LanguageServerId) -> Result<String> {
-        let config = self.ensure_config()?;
+        let config = self.ensure_config();
         let cache = Cache::new(&config.lsp_version)?;
 
         zed::set_language_server_installation_status(
